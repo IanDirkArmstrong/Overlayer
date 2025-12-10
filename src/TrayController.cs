@@ -41,13 +41,15 @@ public class TrayController : ApplicationContext
     private static Icon CreateDefaultIcon()
     {
         // Create icon based on stacked layers design (similar to Heroicons square-stack)
+        // Using brand color #00B4EF
         using var bitmap = new Bitmap(16, 16);
         using var g = Graphics.FromImage(bitmap);
 
         g.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
         g.Clear(Color.Transparent);
 
-        using var pen = new Pen(Color.White, 1.2f);
+        var brandColor = Color.FromArgb(0x00, 0xB4, 0xEF); // #00B4EF
+        using var pen = new Pen(brandColor, 1.2f);
         pen.LineJoin = System.Drawing.Drawing2D.LineJoin.Round;
 
         // Top layer (smallest, at top) - just the top edge hint
@@ -129,6 +131,7 @@ public class TrayController : ApplicationContext
 
     private void LoadImage()
     {
+        DebugLog.Log("[TrayController.LoadImage] Opening file dialog...");
         using var dialog = new OpenFileDialog
         {
             Title = "Select Image to Overlay",
@@ -136,10 +139,15 @@ public class TrayController : ApplicationContext
             Multiselect = true
         };
 
-        if (dialog.ShowDialog() == DialogResult.OK)
+        var dialogResult = dialog.ShowDialog();
+        DebugLog.Log($"[TrayController.LoadImage] Dialog result: {dialogResult}");
+
+        if (dialogResult == DialogResult.OK)
         {
+            DebugLog.Log($"[TrayController.LoadImage] Selected {dialog.FileNames.Length} file(s)");
             foreach (var file in dialog.FileNames)
             {
+                DebugLog.Log($"[TrayController.LoadImage] Creating overlay for: {file}");
                 CreateOverlay(file);
             }
             _configDirty = true;
@@ -178,18 +186,23 @@ public class TrayController : ApplicationContext
 
     private void CreateOverlay(OverlayConfig config)
     {
+        DebugLog.Log($"[TrayController.CreateOverlay] Creating overlay for: {config.ImagePath}");
         try
         {
             var overlay = new OverlayWindow(config);
+            DebugLog.Log($"[TrayController.CreateOverlay] OverlayWindow created");
 
             overlay.OverlayClosed += OnOverlayClosed;
             overlay.ConfigChanged += (s, e) => _configDirty = true;
 
             _overlays.Add(overlay);
+            DebugLog.Log($"[TrayController.CreateOverlay] Calling overlay.Show()...");
             overlay.Show();
+            DebugLog.Log($"[TrayController.CreateOverlay] overlay.Show() complete, Visible={overlay.Visible}, Size={overlay.Size}");
         }
         catch (Exception ex)
         {
+            DebugLog.Log($"[TrayController.CreateOverlay] ERROR: {ex.Message}");
             System.Diagnostics.Debug.WriteLine($"Failed to create overlay: {ex.Message}");
         }
     }

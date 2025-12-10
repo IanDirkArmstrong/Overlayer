@@ -4,6 +4,22 @@ using static Overlayer.NativeMethods;
 
 namespace Overlayer;
 
+internal static class DebugLog
+{
+    private static readonly string LogPath = Path.Combine(AppContext.BaseDirectory, "debug.log");
+
+    public static void Log(string message)
+    {
+        var line = $"[{DateTime.Now:HH:mm:ss.fff}] {message}";
+        Console.WriteLine(line);
+        try
+        {
+            File.AppendAllText(LogPath, line + Environment.NewLine);
+        }
+        catch { }
+    }
+}
+
 /// <summary>
 /// A borderless, transparent overlay window that displays a single image.
 /// Supports dragging, scaling, transparency cropping, padding, and screen edge snapping.
@@ -17,9 +33,13 @@ public class OverlayWindow : Form
     private float _scale;
     private bool _isLocked;
     private bool _isDragging;
-    private bool _isResizing;
     private Point _dragStart;
-    private Point _resizeStart;
+
+    // Edge/corner resize state
+    private ResizeEdge _hoveredEdge;
+    private ResizeEdge _activeEdge;
+    private Point _anchorPoint;
+    private Size _originalSize;
     private float _scaleAtResizeStart;
 
     // New settings
@@ -28,9 +48,9 @@ public class OverlayWindow : Form
     private bool _snapToEdges;
     private int _snapMargin;
 
-    private const int HandleSize = 12;
-    private const int HandleMargin = 2;
-    private const int SnapThreshold = 20; // Pixels within which snapping activates
+    private const int EdgeHitZone = 10;    // Pixels from edge to detect resize
+    private const int CornerHitZone = 16;  // Larger hit zone for corners
+    private const int SnapThreshold = 20;  // Pixels within which snapping activates
 
     /// <summary>
     /// Gets the configuration for this overlay.
@@ -99,6 +119,7 @@ public class OverlayWindow : Form
         MouseDown += OnMouseDown;
         MouseMove += OnMouseMove;
         MouseUp += OnMouseUp;
+        MouseLeave += OnMouseLeave;
         MouseWheel += OnMouseWheel;
         KeyDown += OnKeyDown;
     }
@@ -115,21 +136,27 @@ public class OverlayWindow : Form
 
     private void LoadImage()
     {
+        DebugLog.Log($"[LoadImage] Starting to load: {_imagePath}");
         try
         {
             if (!File.Exists(_imagePath))
             {
                 throw new FileNotFoundException($"Image not found: {_imagePath}");
             }
+            DebugLog.Log($"[LoadImage] File exists, loading bitmap...");
 
             using var temp = new Bitmap(_imagePath);
+            DebugLog.Log($"[LoadImage] Temp bitmap created: {temp.Width}x{temp.Height}");
             _originalImage = new Bitmap(temp);
+            DebugLog.Log($"[LoadImage] Original image copied: {_originalImage.Width}x{_originalImage.Height}");
 
             ProcessImage();
             UpdateScaledImage();
+            DebugLog.Log($"[LoadImage] Complete!");
         }
         catch (Exception ex)
         {
+            DebugLog.Log($"[LoadImage] ERROR: {ex.Message}");
             System.Diagnostics.Debug.WriteLine($"Failed to load image: {ex.Message}");
             MessageBox.Show($"Failed to load image: {ex.Message}", "Error",
                 MessageBoxButtons.OK, MessageBoxIcon.Error);
@@ -265,13 +292,20 @@ public class OverlayWindow : Form
 
     private void UpdateScaledImage()
     {
+        DebugLog.Log($"[UpdateScaledImage] Starting...");
         var sourceImage = _croppedImage ?? _originalImage;
-        if (sourceImage == null) return;
+        if (sourceImage == null)
+        {
+            DebugLog.Log($"[UpdateScaledImage] ERROR: sourceImage is null!");
+            return;
+        }
+        DebugLog.Log($"[UpdateScaledImage] Source image: {sourceImage.Width}x{sourceImage.Height}, scale: {_scale}");
 
         _currentImage?.Dispose();
 
         var newWidth = Math.Max(1, (int)(sourceImage.Width * _scale));
         var newHeight = Math.Max(1, (int)(sourceImage.Height * _scale));
+        DebugLog.Log($"[UpdateScaledImage] New dimensions: {newWidth}x{newHeight}");
 
         _currentImage = new Bitmap(newWidth, newHeight, PixelFormat.Format32bppArgb);
 
@@ -285,59 +319,57 @@ public class OverlayWindow : Form
 
             if (!_isLocked)
             {
-                DrawResizeHandle(g, newWidth, newHeight);
+                DrawBorder(g, newWidth, newHeight);
             }
         }
 
         Size = new Size(newWidth, newHeight);
+        DebugLog.Log($"[UpdateScaledImage] Window size set to: {Size.Width}x{Size.Height}");
         UpdateLayeredWindowImage();
     }
 
-    private void DrawResizeHandle(Graphics g, int width, int height)
+    private void DrawBorder(Graphics g, int width, int height)
     {
-        var handleRect = new Rectangle(
-            width - HandleSize - HandleMargin,
-            height - HandleSize - HandleMargin,
-            HandleSize,
-            HandleSize);
+        // Determine opacity based on hover state
+        int opacity = _hoveredEdge != ResizeEdge.None ? 128 : 38; // ~50% or ~15%
 
-        using var bgBrush = new SolidBrush(Color.FromArgb(180, 40, 40, 40));
-        using var borderPen = new Pen(Color.FromArgb(220, 255, 255, 255), 1);
+        // Draw contrasting border: dark outer, white inner
+        using var outerPen = new Pen(Color.FromArgb(opacity, 0, 0, 0), 3);
+        using var innerPen = new Pen(Color.FromArgb(opacity, 255, 255, 255), 1);
 
-        g.SmoothingMode = SmoothingMode.AntiAlias;
-
-        using var path = new GraphicsPath();
-        var r = 3;
-        path.AddArc(handleRect.X, handleRect.Y, r * 2, r * 2, 180, 90);
-        path.AddArc(handleRect.Right - r * 2, handleRect.Y, r * 2, r * 2, 270, 90);
-        path.AddArc(handleRect.Right - r * 2, handleRect.Bottom - r * 2, r * 2, r * 2, 0, 90);
-        path.AddArc(handleRect.X, handleRect.Bottom - r * 2, r * 2, r * 2, 90, 90);
-        path.CloseFigure();
-
-        g.FillPath(bgBrush, path);
-        g.DrawPath(borderPen, path);
-
-        using var linePen = new Pen(Color.FromArgb(220, 255, 255, 255), 1);
-        var cx = handleRect.X + handleRect.Width / 2;
-        var cy = handleRect.Y + handleRect.Height / 2;
-
-        g.DrawLine(linePen, cx + 2, cy - 2, cx - 2, cy + 2);
-        g.DrawLine(linePen, cx + 4, cy, cx, cy + 4);
-        g.DrawLine(linePen, cx + 2, cy + 2, cx + 2, cy + 2);
+        // Draw outer (dark) border - slightly inset to stay within bounds
+        g.DrawRectangle(outerPen, 1, 1, width - 3, height - 3);
+        // Draw inner (white) border
+        g.DrawRectangle(innerPen, 1, 1, width - 3, height - 3);
     }
 
     private void UpdateLayeredWindowImage()
     {
-        if (_currentImage == null || !IsHandleCreated) return;
+        DebugLog.Log($"[UpdateLayeredWindowImage] Starting...");
+        if (_currentImage == null)
+        {
+            DebugLog.Log($"[UpdateLayeredWindowImage] ERROR: _currentImage is null!");
+            return;
+        }
+        if (!IsHandleCreated)
+        {
+            DebugLog.Log($"[UpdateLayeredWindowImage] ERROR: Handle not created!");
+            return;
+        }
+        DebugLog.Log($"[UpdateLayeredWindowImage] Image: {_currentImage.Width}x{_currentImage.Height}, Handle: {Handle}");
 
         var screenDc = GetDC(IntPtr.Zero);
+        DebugLog.Log($"[UpdateLayeredWindowImage] screenDc: {screenDc}");
         var memDc = CreateCompatibleDC(screenDc);
+        DebugLog.Log($"[UpdateLayeredWindowImage] memDc: {memDc}");
         var hBitmap = _currentImage.GetHbitmap(Color.FromArgb(0));
+        DebugLog.Log($"[UpdateLayeredWindowImage] hBitmap: {hBitmap}");
         var oldBitmap = SelectObject(memDc, hBitmap);
 
         var size = new SIZE(_currentImage.Width, _currentImage.Height);
         var pointSource = new POINT(0, 0);
         var topPos = new POINT(Left, Top);
+        DebugLog.Log($"[UpdateLayeredWindowImage] Position: ({Left}, {Top})");
         var blend = new BLENDFUNCTION
         {
             BlendOp = AC_SRC_OVER,
@@ -346,12 +378,14 @@ public class OverlayWindow : Form
             AlphaFormat = AC_SRC_ALPHA
         };
 
-        UpdateLayeredWindow(Handle, screenDc, ref topPos, ref size, memDc, ref pointSource, 0, ref blend, ULW_ALPHA);
+        var result = UpdateLayeredWindow(Handle, screenDc, ref topPos, ref size, memDc, ref pointSource, 0, ref blend, ULW_ALPHA);
+        DebugLog.Log($"[UpdateLayeredWindowImage] UpdateLayeredWindow result: {result}");
 
         SelectObject(memDc, oldBitmap);
         DeleteObject(hBitmap);
         DeleteDC(memDc);
         ReleaseDC(IntPtr.Zero, screenDc);
+        DebugLog.Log($"[UpdateLayeredWindowImage] Complete!");
     }
 
     protected override void OnMove(EventArgs e)
@@ -363,21 +397,60 @@ public class OverlayWindow : Form
     protected override void OnShown(EventArgs e)
     {
         base.OnShown(e);
+        DebugLog.Log($"[OnShown] Window shown, calling UpdateLayeredWindowImage...");
         SetWindowPos(Handle, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        UpdateLayeredWindowImage();
     }
 
-    private Rectangle GetResizeHandleRect()
+    private ResizeEdge GetEdgeAtPoint(Point p)
     {
-        return new Rectangle(
-            Width - HandleSize - HandleMargin,
-            Height - HandleSize - HandleMargin,
-            HandleSize,
-            HandleSize);
+        bool nearLeft = p.X < CornerHitZone;
+        bool nearRight = p.X > Width - CornerHitZone;
+        bool nearTop = p.Y < CornerHitZone;
+        bool nearBottom = p.Y > Height - CornerHitZone;
+
+        // Check corners first (they have priority)
+        if (nearTop && nearLeft) return ResizeEdge.TopLeft;
+        if (nearTop && nearRight) return ResizeEdge.TopRight;
+        if (nearBottom && nearLeft) return ResizeEdge.BottomLeft;
+        if (nearBottom && nearRight) return ResizeEdge.BottomRight;
+
+        // Check edges
+        if (p.X < EdgeHitZone) return ResizeEdge.Left;
+        if (p.X > Width - EdgeHitZone) return ResizeEdge.Right;
+        if (p.Y < EdgeHitZone) return ResizeEdge.Top;
+        if (p.Y > Height - EdgeHitZone) return ResizeEdge.Bottom;
+
+        return ResizeEdge.None;
     }
 
-    private bool IsInResizeHandle(Point p)
+    private Cursor GetCursorForEdge(ResizeEdge edge)
     {
-        return GetResizeHandleRect().Contains(p);
+        return edge switch
+        {
+            ResizeEdge.TopLeft or ResizeEdge.BottomRight => Cursors.SizeNWSE,
+            ResizeEdge.TopRight or ResizeEdge.BottomLeft => Cursors.SizeNESW,
+            ResizeEdge.Top or ResizeEdge.Bottom => Cursors.SizeNS,
+            ResizeEdge.Left or ResizeEdge.Right => Cursors.SizeWE,
+            _ => Cursors.SizeAll
+        };
+    }
+
+    private Point GetAnchorPoint(ResizeEdge edge)
+    {
+        // Return the screen position of the opposite corner/edge
+        return edge switch
+        {
+            ResizeEdge.TopLeft => PointToScreen(new Point(Width, Height)),
+            ResizeEdge.TopRight => PointToScreen(new Point(0, Height)),
+            ResizeEdge.BottomLeft => PointToScreen(new Point(Width, 0)),
+            ResizeEdge.BottomRight => PointToScreen(new Point(0, 0)),
+            ResizeEdge.Top => PointToScreen(new Point(Width / 2, Height)),
+            ResizeEdge.Bottom => PointToScreen(new Point(Width / 2, 0)),
+            ResizeEdge.Left => PointToScreen(new Point(Width, Height / 2)),
+            ResizeEdge.Right => PointToScreen(new Point(0, Height / 2)),
+            _ => PointToScreen(new Point(Width / 2, Height / 2))
+        };
     }
 
     /// <summary>
@@ -463,10 +536,12 @@ public class OverlayWindow : Form
 
         if (e.Button == MouseButtons.Left)
         {
-            if (IsInResizeHandle(e.Location))
+            var edge = GetEdgeAtPoint(e.Location);
+            if (edge != ResizeEdge.None)
             {
-                _isResizing = true;
-                _resizeStart = PointToScreen(e.Location);
+                _activeEdge = edge;
+                _anchorPoint = GetAnchorPoint(edge);
+                _originalSize = Size;
                 _scaleAtResizeStart = _scale;
             }
             else
@@ -485,23 +560,28 @@ public class OverlayWindow : Form
     {
         if (_isLocked) return;
 
-        if (_isResizing)
+        if (_activeEdge != ResizeEdge.None)
         {
+            // Resizing: calculate new scale based on distance from anchor
             var currentPos = PointToScreen(e.Location);
-            var deltaX = currentPos.X - _resizeStart.X;
-            var deltaY = currentPos.Y - _resizeStart.Y;
 
-            // Use the larger of X/Y movement for scaling
-            var delta = Math.Max(deltaX, deltaY);
-            // 200 pixels of drag = 100% scale change (smoother than before)
-            var scaleDelta = delta / 200.0f;
-            var newScale = Math.Max(0.1f, Math.Min(_scaleAtResizeStart + scaleDelta, 10.0f));
+            // Calculate distances from anchor point
+            var originalDistance = GetDistanceForEdge(_activeEdge, _anchorPoint, _originalSize);
+            var currentDistance = GetDistanceFromAnchor(_activeEdge, _anchorPoint, currentPos);
 
-            // Update on any change for smooth dragging
-            if (newScale != _scale)
+            if (originalDistance > 0)
             {
-                _scale = newScale;
-                UpdateScaledImage();
+                var newScale = Math.Max(0.1f, Math.Min(_scaleAtResizeStart * (currentDistance / originalDistance), 10.0f));
+
+                if (Math.Abs(newScale - _scale) > 0.001f)
+                {
+                    var oldSize = Size;
+                    _scale = newScale;
+                    UpdateScaledImage();
+
+                    // Reposition window so anchor point stays fixed
+                    RepositionForAnchor(_activeEdge, _anchorPoint);
+                }
             }
         }
         else if (_isDragging)
@@ -513,17 +593,92 @@ public class OverlayWindow : Form
         }
         else
         {
-            Cursor = IsInResizeHandle(e.Location) ? Cursors.SizeNWSE : Cursors.SizeAll;
+            // Hover detection
+            var edge = GetEdgeAtPoint(e.Location);
+            if (edge != _hoveredEdge)
+            {
+                _hoveredEdge = edge;
+                UpdateScaledImage(); // Redraw border with new opacity
+            }
+            Cursor = GetCursorForEdge(edge);
         }
+    }
+
+    private float GetDistanceForEdge(ResizeEdge edge, Point anchor, Size size)
+    {
+        // Get the original distance from anchor to the dragged edge/corner
+        return edge switch
+        {
+            ResizeEdge.TopLeft or ResizeEdge.TopRight or
+            ResizeEdge.BottomLeft or ResizeEdge.BottomRight =>
+                (float)Math.Sqrt(size.Width * size.Width + size.Height * size.Height),
+            ResizeEdge.Top or ResizeEdge.Bottom => size.Height,
+            ResizeEdge.Left or ResizeEdge.Right => size.Width,
+            _ => 1
+        };
+    }
+
+    private float GetDistanceFromAnchor(ResizeEdge edge, Point anchor, Point current)
+    {
+        // Calculate distance based on which edge/corner is being dragged
+        return edge switch
+        {
+            ResizeEdge.TopLeft or ResizeEdge.TopRight or
+            ResizeEdge.BottomLeft or ResizeEdge.BottomRight =>
+                (float)Math.Sqrt(Math.Pow(current.X - anchor.X, 2) + Math.Pow(current.Y - anchor.Y, 2)),
+            ResizeEdge.Top or ResizeEdge.Bottom => Math.Abs(current.Y - anchor.Y),
+            ResizeEdge.Left or ResizeEdge.Right => Math.Abs(current.X - anchor.X),
+            _ => 1
+        };
+    }
+
+    private void RepositionForAnchor(ResizeEdge edge, Point anchor)
+    {
+        // Reposition window so the anchor point stays at its original screen position
+        int newX = Location.X;
+        int newY = Location.Y;
+
+        switch (edge)
+        {
+            case ResizeEdge.TopLeft:
+                newX = anchor.X - Width;
+                newY = anchor.Y - Height;
+                break;
+            case ResizeEdge.TopRight:
+                newY = anchor.Y - Height;
+                break;
+            case ResizeEdge.BottomLeft:
+                newX = anchor.X - Width;
+                break;
+            case ResizeEdge.BottomRight:
+                // Anchor is top-left, no repositioning needed
+                break;
+            case ResizeEdge.Top:
+                newX = anchor.X - Width / 2;
+                newY = anchor.Y - Height;
+                break;
+            case ResizeEdge.Bottom:
+                newX = anchor.X - Width / 2;
+                break;
+            case ResizeEdge.Left:
+                newX = anchor.X - Width;
+                newY = anchor.Y - Height / 2;
+                break;
+            case ResizeEdge.Right:
+                newY = anchor.Y - Height / 2;
+                break;
+        }
+
+        Location = new Point(newX, newY);
     }
 
     private void OnMouseUp(object? sender, MouseEventArgs e)
     {
         if (e.Button == MouseButtons.Left)
         {
-            if (_isResizing)
+            if (_activeEdge != ResizeEdge.None)
             {
-                _isResizing = false;
+                _activeEdge = ResizeEdge.None;
                 ConfigChanged?.Invoke(this, EventArgs.Empty);
             }
             else if (_isDragging)
@@ -531,6 +686,15 @@ public class OverlayWindow : Form
                 _isDragging = false;
                 ConfigChanged?.Invoke(this, EventArgs.Empty);
             }
+        }
+    }
+
+    private void OnMouseLeave(object? sender, EventArgs e)
+    {
+        if (_hoveredEdge != ResizeEdge.None)
+        {
+            _hoveredEdge = ResizeEdge.None;
+            UpdateScaledImage();
         }
     }
 
@@ -853,4 +1017,17 @@ public enum SnapPosition
     BottomLeft,
     BottomRight,
     Center
+}
+
+public enum ResizeEdge
+{
+    None,
+    Top,
+    Right,
+    Bottom,
+    Left,
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight
 }

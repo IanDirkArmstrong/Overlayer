@@ -26,6 +26,15 @@ internal static class Program
                 MessageBoxButtons.OK, MessageBoxIcon.Error);
         };
 
+        // Check for special commands
+        if (args.Length > 0 && args[0].Equals("--generate-icon", StringComparison.OrdinalIgnoreCase))
+        {
+            var iconPath = args.Length > 1 ? args[1] : "app.ico";
+            IconGenerator.SaveIconFile(iconPath);
+            Console.WriteLine($"Icon generated: {iconPath}");
+            return;
+        }
+
         // Check for command line arguments (load images from files or directory)
         if (args.Length > 0)
         {
