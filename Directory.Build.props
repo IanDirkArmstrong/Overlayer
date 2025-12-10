@@ -1,0 +1,17 @@
+<Project>
+  <PropertyGroup>
+    <!-- Enable strict code analysis -->
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+
+    <!-- Treat warnings as errors in Release builds -->
+    <TreatWarningsAsErrors Condition="'$(Configuration)' == 'Release'">true</TreatWarningsAsErrors>
+
+    <!-- Nullable reference types -->
+    <Nullable>enable</Nullable>
+
+    <!-- Implicit usings -->
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,25 @@
+{
+  "overlays": [
+    {
+      "imagePath": "C:\\Images\\crosshair.png",
+      "x": 960,
+      "y": 540,
+      "scale": 1.0,
+      "locked": true
+    },
+    {
+      "imagePath": "C:\\Images\\minimap.png",
+      "x": 50,
+      "y": 50,
+      "scale": 0.75,
+      "locked": false
+    },
+    {
+      "imagePath": "C:\\Images\\logo.png",
+      "x": 1800,
+      "y": 20,
+      "scale": 0.5,
+      "locked": true
+    }
+  ]
+}

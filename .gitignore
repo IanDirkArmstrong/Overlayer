@@ -1,0 +1,43 @@
+# Build outputs
+bin/
+obj/
+publish/
+
+# IDE and editor files
+.vs/
+.vscode/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Rider
+.idea/
+*.sln.iml
+
+# NuGet
+*.nupkg
+**/packages/*
+!**/packages/build/
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Application files
+overlayer-config.json
+
+# Logs
+*.log
+
+# Test results
+TestResults/
+coverage/
+.claude
