@@ -26,47 +26,76 @@ internal static class Program
                 MessageBoxButtons.OK, MessageBoxIcon.Error);
         };
 
-        // Check for command line arguments (load images from directory)
+        // Check for command line arguments (load images from files or directory)
         if (args.Length > 0)
         {
-            var dirPath = args[0];
-            if (Directory.Exists(dirPath))
-            {
-                LoadImagesFromDirectoryOnStartup(dirPath);
-            }
+            LoadFromCommandLineArgs(args);
         }
 
         // Run the application with the tray controller
         Application.Run(new TrayController());
     }
 
-    private static void LoadImagesFromDirectoryOnStartup(string directoryPath)
+    private static void LoadFromCommandLineArgs(string[] args)
     {
-        // This will be handled by creating a config if none exists
-        // and the TrayController will load it
         var config = ConfigManager.Load();
-
-        if (config.Overlays.Count == 0)
+        var extensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
-            var extensions = new[] { "*.png", "*.jpg", "*.jpeg", "*.bmp", "*.gif" };
-            var files = extensions
-                .SelectMany(ext => Directory.GetFiles(directoryPath, ext, SearchOption.TopDirectoryOnly))
-                .ToList();
+            ".png", ".jpg", ".jpeg", ".bmp", ".gif"
+        };
 
-            int offset = 0;
-            foreach (var file in files)
+        var filesToAdd = new List<string>();
+
+        foreach (var arg in args)
+        {
+            if (Directory.Exists(arg))
+            {
+                // It's a directory - load all images from it
+                var patterns = new[] { "*.png", "*.jpg", "*.jpeg", "*.bmp", "*.gif" };
+                var dirFiles = patterns
+                    .SelectMany(ext => Directory.GetFiles(arg, ext, SearchOption.TopDirectoryOnly));
+                filesToAdd.AddRange(dirFiles);
+            }
+            else if (File.Exists(arg))
+            {
+                // It's a file - check if it's an image
+                var ext = Path.GetExtension(arg);
+                if (extensions.Contains(ext))
+                {
+                    filesToAdd.Add(arg);
+                }
+            }
+        }
+
+        // Only add files that aren't already in the config
+        var existingPaths = new HashSet<string>(
+            config.Overlays.Select(o => o.ImagePath),
+            StringComparer.OrdinalIgnoreCase);
+
+        int offset = config.Overlays.Count * 30;
+        foreach (var file in filesToAdd)
+        {
+            var fullPath = Path.GetFullPath(file);
+            if (!existingPaths.Contains(fullPath))
             {
                 config.Overlays.Add(new OverlayConfig
                 {
-                    ImagePath = file,
+                    ImagePath = fullPath,
                     X = 100 + offset,
                     Y = 100 + offset,
                     Scale = 1.0f,
-                    Locked = false
+                    Locked = false,
+                    CropTransparency = true,
+                    Padding = 0,
+                    SnapToEdges = true,
+                    SnapMargin = 10
                 });
                 offset += 30;
             }
+        }
 
+        if (filesToAdd.Count > 0)
+        {
             ConfigManager.Save(config);
         }
     }

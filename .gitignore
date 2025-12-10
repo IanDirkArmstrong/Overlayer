@@ -41,3 +41,6 @@ overlayer-config.json
 TestResults/
 coverage/
 .claude
+
+# Generated test images
+test/*.png

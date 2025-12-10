@@ -267,8 +267,9 @@ brew install wine-stable
 ### Development Workflow
 
 ```bash
-# Build and run with Wine
-./scripts/dev-mac.sh
+# Build and run with Wine (pass images via command line - dialogs don't work)
+./scripts/dev-mac.sh /path/to/test-image.png
+./scripts/dev-mac.sh /path/to/images/        # Load all images from directory
 
 # Or just build (works on Mac/Linux/Windows)
 ./scripts/build.sh         # Release build
@@ -279,6 +280,7 @@ brew install wine-stable
 
 Wine won't perfectly emulate Windows layered windows:
 
+- **File dialogs don't work** - pass images via command line instead
 - Transparency may render incorrectly (solid background)
 - Click-through mode won't work
 - System tray behavior may differ
