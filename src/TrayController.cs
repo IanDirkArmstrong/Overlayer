@@ -194,6 +194,8 @@ public class TrayController : ApplicationContext
 
             overlay.OverlayClosed += OnOverlayClosed;
             overlay.ConfigChanged += (s, e) => _configDirty = true;
+            overlay.ApplyPaddingToAll += OnApplyPaddingToAll;
+            overlay.ApplySnapMarginToAll += OnApplySnapMarginToAll;
 
             _overlays.Add(overlay);
             DebugLog.Log($"[TrayController.CreateOverlay] Calling overlay.Show()...");
@@ -205,6 +207,24 @@ public class TrayController : ApplicationContext
             DebugLog.Log($"[TrayController.CreateOverlay] ERROR: {ex.Message}");
             System.Diagnostics.Debug.WriteLine($"Failed to create overlay: {ex.Message}");
         }
+    }
+
+    private void OnApplyPaddingToAll(object? sender, int padding)
+    {
+        foreach (var overlay in _overlays)
+        {
+            overlay.SetPadding(padding);
+        }
+        _configDirty = true;
+    }
+
+    private void OnApplySnapMarginToAll(object? sender, int snapMargin)
+    {
+        foreach (var overlay in _overlays)
+        {
+            overlay.SetSnapMargin(snapMargin);
+        }
+        _configDirty = true;
     }
 
     private void CreateOverlay(string imagePath)

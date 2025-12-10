@@ -48,25 +48,40 @@ public class OverlayWindow : Form
     private bool _snapToEdges;
     private int _snapMargin;
 
+    // Margin adjustment state
+    private bool _isAdjustingPadding;
+    private bool _isAdjustingSnapMargin;
+    private int _marginAdjustStart;
+    private int _marginValueAtStart;
+
     private const int EdgeHitZone = 10;    // Pixels from edge to detect resize
     private const int CornerHitZone = 16;  // Larger hit zone for corners
     private const int SnapThreshold = 20;  // Pixels within which snapping activates
+    private const int MarginHitZone = 8;   // Pixels to detect margin border drag
 
     /// <summary>
     /// Gets the configuration for this overlay.
     /// </summary>
-    public OverlayConfig Config => new()
+    public OverlayConfig Config
     {
-        ImagePath = _imagePath,
-        X = Location.X,
-        Y = Location.Y,
-        Scale = _scale,
-        Locked = _isLocked,
-        CropTransparency = _cropTransparency,
-        Padding = _padding,
-        SnapToEdges = _snapToEdges,
-        SnapMargin = _snapMargin
-    };
+        get
+        {
+            // Account for snap margin expansion when saving position
+            var expansion = SnapMarginExpansion;
+            return new()
+            {
+                ImagePath = _imagePath,
+                X = Location.X + expansion,
+                Y = Location.Y + expansion,
+                Scale = _scale,
+                Locked = _isLocked,
+                CropTransparency = _cropTransparency,
+                Padding = _padding,
+                SnapToEdges = _snapToEdges,
+                SnapMargin = _snapMargin
+            };
+        }
+    }
 
     /// <summary>
     /// Event raised when the overlay is closed.
@@ -77,6 +92,16 @@ public class OverlayWindow : Form
     /// Event raised when configuration changes (position, scale, lock state).
     /// </summary>
     public event EventHandler? ConfigChanged;
+
+    /// <summary>
+    /// Event raised when padding should be applied to all overlays.
+    /// </summary>
+    public event EventHandler<int>? ApplyPaddingToAll;
+
+    /// <summary>
+    /// Event raised when snap margin should be applied to all overlays.
+    /// </summary>
+    public event EventHandler<int>? ApplySnapMarginToAll;
 
     public OverlayWindow(OverlayConfig config)
         : this(config.ImagePath, config.X, config.Y, config.Scale, config.Locked,
@@ -97,7 +122,10 @@ public class OverlayWindow : Form
 
         InitializeWindow();
         LoadImage();
-        Location = new Point(x, y);
+
+        // Adjust position for snap margin expansion (config stores image position, not window position)
+        var expansion = SnapMarginExpansion;
+        Location = new Point(x - expansion, y - expansion);
 
         if (_isLocked)
         {
@@ -290,6 +318,11 @@ public class OverlayWindow : Form
         return padded;
     }
 
+    /// <summary>
+    /// Gets the extra margin added to the window for snap margin visualization.
+    /// </summary>
+    private int SnapMarginExpansion => (!_isLocked && _snapMargin > 0) ? _snapMargin : 0;
+
     private void UpdateScaledImage()
     {
         DebugLog.Log($"[UpdateScaledImage] Starting...");
@@ -303,9 +336,15 @@ public class OverlayWindow : Form
 
         _currentImage?.Dispose();
 
-        var newWidth = Math.Max(1, (int)(sourceImage.Width * _scale));
-        var newHeight = Math.Max(1, (int)(sourceImage.Height * _scale));
-        DebugLog.Log($"[UpdateScaledImage] New dimensions: {newWidth}x{newHeight}");
+        var imageWidth = Math.Max(1, (int)(sourceImage.Width * _scale));
+        var imageHeight = Math.Max(1, (int)(sourceImage.Height * _scale));
+
+        // Expand window size for snap margin visualization when unlocked
+        var expansion = SnapMarginExpansion;
+        var newWidth = imageWidth + expansion * 2;
+        var newHeight = imageHeight + expansion * 2;
+
+        DebugLog.Log($"[UpdateScaledImage] New dimensions: {newWidth}x{newHeight} (expansion: {expansion})");
 
         _currentImage = new Bitmap(newWidth, newHeight, PixelFormat.Format32bppArgb);
 
@@ -315,7 +354,12 @@ public class OverlayWindow : Form
             g.SmoothingMode = SmoothingMode.HighQuality;
             g.PixelOffsetMode = PixelOffsetMode.HighQuality;
             g.CompositingQuality = CompositingQuality.HighQuality;
-            g.DrawImage(sourceImage, 0, 0, newWidth, newHeight);
+
+            // Clear with transparency
+            g.Clear(Color.Transparent);
+
+            // Draw the image offset by the expansion amount
+            g.DrawImage(sourceImage, expansion, expansion, imageWidth, imageHeight);
 
             if (!_isLocked)
             {
@@ -330,17 +374,68 @@ public class OverlayWindow : Form
 
     private void DrawBorder(Graphics g, int width, int height)
     {
+        var expansion = SnapMarginExpansion;
+
         // Determine opacity based on hover state
         int opacity = _hoveredEdge != ResizeEdge.None ? 128 : 38; // ~50% or ~15%
 
-        // Draw contrasting border: dark outer, white inner
+        // Draw contrasting border around the image area (accounting for expansion)
         using var outerPen = new Pen(Color.FromArgb(opacity, 0, 0, 0), 3);
         using var innerPen = new Pen(Color.FromArgb(opacity, 255, 255, 255), 1);
 
-        // Draw outer (dark) border - slightly inset to stay within bounds
-        g.DrawRectangle(outerPen, 1, 1, width - 3, height - 3);
-        // Draw inner (white) border
-        g.DrawRectangle(innerPen, 1, 1, width - 3, height - 3);
+        // Border is drawn around the image content (inside the expansion area)
+        var borderX = expansion + 1;
+        var borderY = expansion + 1;
+        var borderW = width - expansion * 2 - 3;
+        var borderH = height - expansion * 2 - 3;
+
+        if (borderW > 0 && borderH > 0)
+        {
+            g.DrawRectangle(outerPen, borderX, borderY, borderW, borderH);
+            g.DrawRectangle(innerPen, borderX, borderY, borderW, borderH);
+        }
+
+        // Draw margin visualizations
+        DrawMarginVisualization(g, width, height);
+    }
+
+    private void DrawMarginVisualization(Graphics g, int width, int height)
+    {
+        var expansion = SnapMarginExpansion;
+
+        // Get scaled padding value
+        int scaledPadding = (int)(_padding * _scale);
+
+        // Draw padding border (inner, blue dashed) if padding > 0
+        if (_padding > 0 && scaledPadding > 2)
+        {
+            using var paddingPen = new Pen(Color.FromArgb(100, 0, 120, 215), 1);
+            paddingPen.DashStyle = System.Drawing.Drawing2D.DashStyle.Dash;
+
+            // Padding border is inside the image area
+            var paddingRect = new Rectangle(
+                expansion + scaledPadding,
+                expansion + scaledPadding,
+                width - expansion * 2 - scaledPadding * 2,
+                height - expansion * 2 - scaledPadding * 2
+            );
+
+            if (paddingRect.Width > 0 && paddingRect.Height > 0)
+            {
+                g.DrawRectangle(paddingPen, paddingRect);
+            }
+        }
+
+        // Draw snap margin border (outer, green dashed) if snap margin > 0
+        if (_snapMargin > 0 && expansion > 0)
+        {
+            using var snapPen = new Pen(Color.FromArgb(100, 0, 180, 0), 1);
+            snapPen.DashStyle = System.Drawing.Drawing2D.DashStyle.Dash;
+
+            // Snap margin border is at the outer edge of the window
+            var snapRect = new Rectangle(0, 0, width - 1, height - 1);
+            g.DrawRectangle(snapPen, snapRect);
+        }
     }
 
     private void UpdateLayeredWindowImage()
@@ -404,10 +499,18 @@ public class OverlayWindow : Form
 
     private ResizeEdge GetEdgeAtPoint(Point p)
     {
-        bool nearLeft = p.X < CornerHitZone;
-        bool nearRight = p.X > Width - CornerHitZone;
-        bool nearTop = p.Y < CornerHitZone;
-        bool nearBottom = p.Y > Height - CornerHitZone;
+        var expansion = SnapMarginExpansion;
+
+        // Adjust point for expansion - resize edges are on the image border, not window edge
+        var adjustedX = p.X - expansion;
+        var adjustedY = p.Y - expansion;
+        var imageWidth = Width - expansion * 2;
+        var imageHeight = Height - expansion * 2;
+
+        bool nearLeft = adjustedX < CornerHitZone && adjustedX >= -expansion;
+        bool nearRight = adjustedX > imageWidth - CornerHitZone && adjustedX <= imageWidth + expansion;
+        bool nearTop = adjustedY < CornerHitZone && adjustedY >= -expansion;
+        bool nearBottom = adjustedY > imageHeight - CornerHitZone && adjustedY <= imageHeight + expansion;
 
         // Check corners first (they have priority)
         if (nearTop && nearLeft) return ResizeEdge.TopLeft;
@@ -416,12 +519,51 @@ public class OverlayWindow : Form
         if (nearBottom && nearRight) return ResizeEdge.BottomRight;
 
         // Check edges
-        if (p.X < EdgeHitZone) return ResizeEdge.Left;
-        if (p.X > Width - EdgeHitZone) return ResizeEdge.Right;
-        if (p.Y < EdgeHitZone) return ResizeEdge.Top;
-        if (p.Y > Height - EdgeHitZone) return ResizeEdge.Bottom;
+        if (adjustedX < EdgeHitZone && adjustedX >= -expansion) return ResizeEdge.Left;
+        if (adjustedX > imageWidth - EdgeHitZone && adjustedX <= imageWidth + expansion) return ResizeEdge.Right;
+        if (adjustedY < EdgeHitZone && adjustedY >= -expansion) return ResizeEdge.Top;
+        if (adjustedY > imageHeight - EdgeHitZone && adjustedY <= imageHeight + expansion) return ResizeEdge.Bottom;
 
         return ResizeEdge.None;
+    }
+
+    /// <summary>
+    /// Determines which margin zone the point is in for Alt+drag adjustment.
+    /// </summary>
+    private MarginZone GetMarginZoneAtPoint(Point p)
+    {
+        var expansion = SnapMarginExpansion;
+        int scaledPadding = (int)(_padding * _scale);
+
+        // Check if in snap margin zone (outer area)
+        if (expansion > 0)
+        {
+            bool inSnapZone = p.X < expansion || p.X >= Width - expansion ||
+                              p.Y < expansion || p.Y >= Height - expansion;
+            if (inSnapZone) return MarginZone.SnapMargin;
+        }
+
+        // Check if in padding zone (near the padding border inside the image)
+        if (_padding > 0 && scaledPadding > 0)
+        {
+            var adjustedX = p.X - expansion;
+            var adjustedY = p.Y - expansion;
+            var imageWidth = Width - expansion * 2;
+            var imageHeight = Height - expansion * 2;
+
+            // Check if near the padding border (within MarginHitZone pixels of the padding line)
+            bool nearPaddingLeft = Math.Abs(adjustedX - scaledPadding) < MarginHitZone;
+            bool nearPaddingRight = Math.Abs(adjustedX - (imageWidth - scaledPadding)) < MarginHitZone;
+            bool nearPaddingTop = Math.Abs(adjustedY - scaledPadding) < MarginHitZone;
+            bool nearPaddingBottom = Math.Abs(adjustedY - (imageHeight - scaledPadding)) < MarginHitZone;
+
+            if (nearPaddingLeft || nearPaddingRight || nearPaddingTop || nearPaddingBottom)
+            {
+                return MarginZone.Padding;
+            }
+        }
+
+        return MarginZone.None;
     }
 
     private Cursor GetCursorForEdge(ResizeEdge edge)
@@ -462,33 +604,38 @@ public class OverlayWindow : Form
 
         var screen = Screen.FromPoint(position);
         var workArea = screen.WorkingArea;
+        var expansion = SnapMarginExpansion;
 
-        int x = position.X;
-        int y = position.Y;
+        // Image position is window position + expansion
+        int imageX = position.X + expansion;
+        int imageY = position.Y + expansion;
+        int imageWidth = Width - expansion * 2;
+        int imageHeight = Height - expansion * 2;
 
-        // Snap left edge
-        if (Math.Abs(x - workArea.Left - _snapMargin) < SnapThreshold)
+        // Snap left edge of image
+        if (Math.Abs(imageX - workArea.Left - _snapMargin) < SnapThreshold)
         {
-            x = workArea.Left + _snapMargin;
+            imageX = workArea.Left + _snapMargin;
         }
-        // Snap right edge
-        else if (Math.Abs(x + Width - (workArea.Right - _snapMargin)) < SnapThreshold)
+        // Snap right edge of image
+        else if (Math.Abs(imageX + imageWidth - (workArea.Right - _snapMargin)) < SnapThreshold)
         {
-            x = workArea.Right - _snapMargin - Width;
-        }
-
-        // Snap top edge
-        if (Math.Abs(y - workArea.Top - _snapMargin) < SnapThreshold)
-        {
-            y = workArea.Top + _snapMargin;
-        }
-        // Snap bottom edge
-        else if (Math.Abs(y + Height - (workArea.Bottom - _snapMargin)) < SnapThreshold)
-        {
-            y = workArea.Bottom - _snapMargin - Height;
+            imageX = workArea.Right - _snapMargin - imageWidth;
         }
 
-        return new Point(x, y);
+        // Snap top edge of image
+        if (Math.Abs(imageY - workArea.Top - _snapMargin) < SnapThreshold)
+        {
+            imageY = workArea.Top + _snapMargin;
+        }
+        // Snap bottom edge of image
+        else if (Math.Abs(imageY + imageHeight - (workArea.Bottom - _snapMargin)) < SnapThreshold)
+        {
+            imageY = workArea.Bottom - _snapMargin - imageHeight;
+        }
+
+        // Convert back to window position
+        return new Point(imageX - expansion, imageY - expansion);
     }
 
     /// <summary>
@@ -498,35 +645,39 @@ public class OverlayWindow : Form
     {
         var screen = Screen.FromControl(this);
         var workArea = screen.WorkingArea;
+        var expansion = SnapMarginExpansion;
+        int imageWidth = Width - expansion * 2;
+        int imageHeight = Height - expansion * 2;
 
-        int x = Location.X;
-        int y = Location.Y;
+        // Calculate image position, then convert to window position
+        int imageX = Location.X + expansion;
+        int imageY = Location.Y + expansion;
 
         switch (position)
         {
             case SnapPosition.TopLeft:
-                x = workArea.Left + _snapMargin;
-                y = workArea.Top + _snapMargin;
+                imageX = workArea.Left + _snapMargin;
+                imageY = workArea.Top + _snapMargin;
                 break;
             case SnapPosition.TopRight:
-                x = workArea.Right - _snapMargin - Width;
-                y = workArea.Top + _snapMargin;
+                imageX = workArea.Right - _snapMargin - imageWidth;
+                imageY = workArea.Top + _snapMargin;
                 break;
             case SnapPosition.BottomLeft:
-                x = workArea.Left + _snapMargin;
-                y = workArea.Bottom - _snapMargin - Height;
+                imageX = workArea.Left + _snapMargin;
+                imageY = workArea.Bottom - _snapMargin - imageHeight;
                 break;
             case SnapPosition.BottomRight:
-                x = workArea.Right - _snapMargin - Width;
-                y = workArea.Bottom - _snapMargin - Height;
+                imageX = workArea.Right - _snapMargin - imageWidth;
+                imageY = workArea.Bottom - _snapMargin - imageHeight;
                 break;
             case SnapPosition.Center:
-                x = workArea.Left + (workArea.Width - Width) / 2;
-                y = workArea.Top + (workArea.Height - Height) / 2;
+                imageX = workArea.Left + (workArea.Width - imageWidth) / 2;
+                imageY = workArea.Top + (workArea.Height - imageHeight) / 2;
                 break;
         }
 
-        Location = new Point(x, y);
+        Location = new Point(imageX - expansion, imageY - expansion);
         ConfigChanged?.Invoke(this, EventArgs.Empty);
     }
 
@@ -536,6 +687,28 @@ public class OverlayWindow : Form
 
         if (e.Button == MouseButtons.Left)
         {
+            // Check for Alt+drag margin adjustment
+            bool altPressed = (ModifierKeys & Keys.Alt) == Keys.Alt;
+            if (altPressed)
+            {
+                var marginZone = GetMarginZoneAtPoint(e.Location);
+                if (marginZone == MarginZone.SnapMargin)
+                {
+                    _isAdjustingSnapMargin = true;
+                    _marginAdjustStart = e.X; // Use X for horizontal reference
+                    _marginValueAtStart = _snapMargin;
+                    return;
+                }
+                else if (marginZone == MarginZone.Padding || _padding > 0)
+                {
+                    // Allow adjusting padding from anywhere with Alt held if padding exists
+                    _isAdjustingPadding = true;
+                    _marginAdjustStart = e.X;
+                    _marginValueAtStart = _padding;
+                    return;
+                }
+            }
+
             var edge = GetEdgeAtPoint(e.Location);
             if (edge != ResizeEdge.None)
             {
@@ -559,6 +732,29 @@ public class OverlayWindow : Form
     private void OnMouseMove(object? sender, MouseEventArgs e)
     {
         if (_isLocked) return;
+
+        // Handle margin adjustment dragging
+        if (_isAdjustingPadding)
+        {
+            int delta = e.X - _marginAdjustStart;
+            int newPadding = Math.Max(0, _marginValueAtStart + delta / 2); // Divide by 2 for finer control
+            if (newPadding != _padding)
+            {
+                SetPadding(newPadding);
+            }
+            return;
+        }
+
+        if (_isAdjustingSnapMargin)
+        {
+            int delta = e.X - _marginAdjustStart;
+            int newSnapMargin = Math.Max(0, _marginValueAtStart + delta / 2);
+            if (newSnapMargin != _snapMargin)
+            {
+                SetSnapMargin(newSnapMargin);
+            }
+            return;
+        }
 
         if (_activeEdge != ResizeEdge.None)
         {
@@ -593,7 +789,19 @@ public class OverlayWindow : Form
         }
         else
         {
-            // Hover detection
+            // Hover detection - check for Alt key for margin adjustment cursor
+            bool altPressed = (ModifierKeys & Keys.Alt) == Keys.Alt;
+
+            if (altPressed)
+            {
+                var marginZone = GetMarginZoneAtPoint(e.Location);
+                if (marginZone != MarginZone.None)
+                {
+                    Cursor = Cursors.SizeWE; // Use horizontal resize cursor for margin adjustment
+                    return;
+                }
+            }
+
             var edge = GetEdgeAtPoint(e.Location);
             if (edge != _hoveredEdge)
             {
@@ -676,7 +884,17 @@ public class OverlayWindow : Form
     {
         if (e.Button == MouseButtons.Left)
         {
-            if (_activeEdge != ResizeEdge.None)
+            if (_isAdjustingPadding)
+            {
+                _isAdjustingPadding = false;
+                ConfigChanged?.Invoke(this, EventArgs.Empty);
+            }
+            else if (_isAdjustingSnapMargin)
+            {
+                _isAdjustingSnapMargin = false;
+                ConfigChanged?.Invoke(this, EventArgs.Empty);
+            }
+            else if (_activeEdge != ResizeEdge.None)
             {
                 _activeEdge = ResizeEdge.None;
                 ConfigChanged?.Invoke(this, EventArgs.Empty);
@@ -892,7 +1110,7 @@ public class OverlayWindow : Form
         menu.Items.Add(cropItem);
 
         // Padding submenu
-        var paddingMenu = new ToolStripMenuItem($"Padding ({_padding}px)");
+        var paddingMenu = new ToolStripMenuItem($"Padding ({_padding}px) [Alt+drag]");
         foreach (var p in new[] { 0, 10, 20, 50, 100 })
         {
             var paddingItem = new ToolStripMenuItem($"{p}px");
@@ -908,6 +1126,10 @@ public class OverlayWindow : Form
         var customPaddingItem = new ToolStripMenuItem("Custom...");
         customPaddingItem.Click += (s, e) => ShowPaddingDialog();
         paddingMenu.DropDownItems.Add(customPaddingItem);
+        paddingMenu.DropDownItems.Add(new ToolStripSeparator());
+        var applyPaddingToAllItem = new ToolStripMenuItem("Apply to all overlays");
+        applyPaddingToAllItem.Click += (s, e) => ApplyPaddingToAll?.Invoke(this, _padding);
+        paddingMenu.DropDownItems.Add(applyPaddingToAllItem);
         menu.Items.Add(paddingMenu);
 
         menu.Items.Add(new ToolStripSeparator());
@@ -921,7 +1143,7 @@ public class OverlayWindow : Form
         menu.Items.Add(snapItem);
 
         // Snap margin submenu
-        var snapMarginMenu = new ToolStripMenuItem($"Snap Margin ({_snapMargin}px)");
+        var snapMarginMenu = new ToolStripMenuItem($"Snap Margin ({_snapMargin}px) [Alt+drag]");
         foreach (var m in new[] { 0, 5, 10, 20, 50 })
         {
             var marginItem = new ToolStripMenuItem($"{m}px");
@@ -933,6 +1155,10 @@ public class OverlayWindow : Form
             }
             snapMarginMenu.DropDownItems.Add(marginItem);
         }
+        snapMarginMenu.DropDownItems.Add(new ToolStripSeparator());
+        var applySnapMarginToAllItem = new ToolStripMenuItem("Apply to all overlays");
+        applySnapMarginToAllItem.Click += (s, e) => ApplySnapMarginToAll?.Invoke(this, _snapMargin);
+        snapMarginMenu.DropDownItems.Add(applySnapMarginToAllItem);
         menu.Items.Add(snapMarginMenu);
 
         // Snap to position submenu
@@ -1030,4 +1256,11 @@ public enum ResizeEdge
     TopRight,
     BottomLeft,
     BottomRight
+}
+
+public enum MarginZone
+{
+    None,
+    Padding,
+    SnapMargin
 }

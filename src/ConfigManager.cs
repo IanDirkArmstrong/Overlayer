@@ -27,7 +27,7 @@ public class OverlayConfig
     public bool CropTransparency { get; set; } = true;
 
     [JsonPropertyName("padding")]
-    public int Padding { get; set; } = 0;
+    public int Padding { get; set; } = 10;
 
     [JsonPropertyName("snapToEdges")]
     public bool SnapToEdges { get; set; } = true;
@@ -56,6 +56,9 @@ public static class ConfigManager
         PropertyNameCaseInsensitive = true
     };
 
+    private const string ConfigFileName = ".overlayer-config.json";
+    private const string OldConfigFileName = "overlayer-config.json";
+
     /// <summary>
     /// Gets the path to the configuration file (next to the executable).
     /// </summary>
@@ -64,7 +67,56 @@ public static class ConfigManager
         get
         {
             var exePath = AppContext.BaseDirectory;
-            return Path.Combine(exePath, "overlayer-config.json");
+            return Path.Combine(exePath, ConfigFileName);
+        }
+    }
+
+    /// <summary>
+    /// Gets the path to the old configuration file (for migration).
+    /// </summary>
+    private static string OldConfigPath
+    {
+        get
+        {
+            var exePath = AppContext.BaseDirectory;
+            return Path.Combine(exePath, OldConfigFileName);
+        }
+    }
+
+    /// <summary>
+    /// Migrates old config file to new hidden format if needed.
+    /// </summary>
+    private static void MigrateConfigIfNeeded()
+    {
+        if (File.Exists(OldConfigPath) && !File.Exists(ConfigPath))
+        {
+            try
+            {
+                File.Move(OldConfigPath, ConfigPath);
+                SetHiddenAttribute(ConfigPath);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Failed to migrate config: {ex.Message}");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Sets the hidden attribute on a file (Windows only).
+    /// </summary>
+    private static void SetHiddenAttribute(string path)
+    {
+        try
+        {
+            if (OperatingSystem.IsWindows() && File.Exists(path))
+            {
+                File.SetAttributes(path, File.GetAttributes(path) | FileAttributes.Hidden);
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"Failed to set hidden attribute: {ex.Message}");
         }
     }
 
@@ -75,6 +127,9 @@ public static class ConfigManager
     {
         try
         {
+            // Migrate old config if needed
+            MigrateConfigIfNeeded();
+
             if (!File.Exists(ConfigPath))
             {
                 return new AppConfig();
@@ -100,6 +155,7 @@ public static class ConfigManager
         {
             var json = JsonSerializer.Serialize(config, JsonOptions);
             File.WriteAllText(ConfigPath, json);
+            SetHiddenAttribute(ConfigPath);
         }
         catch (Exception ex)
         {
