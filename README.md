@@ -23,7 +23,8 @@ A portable Windows WinForms application that displays multiple PNG images as tra
 ### Prerequisites
 
 - .NET 8 SDK (or newer)
-- Windows 10/11
+- Windows 10/11 (for full functionality)
+- **Mac development**: Wine + XQuartz (for quick iteration testing)
 
 ### Build Commands
 
@@ -246,6 +247,44 @@ Use the system tray menu → "Unlock All Overlays" to regain control.
 ### Image looks different than expected
 
 Check "Crop Transparency" setting - if your image has intentional transparent areas at the edges, disable this option.
+
+## Mac Development (Wine + XQuartz)
+
+For quick iteration and testing on Mac, you can use Wine with XQuartz. This won't give you perfect Windows fidelity - transparency and click-through won't work correctly - but it's good enough to verify features work, test scaling logic, check image loading, etc.
+
+### One-Time Setup
+
+```bash
+# Install XQuartz (X11 for Mac)
+brew install --cask xquartz
+
+# Install Wine
+brew install wine-stable
+
+# IMPORTANT: Log out and back in after installing XQuartz
+```
+
+### Development Workflow
+
+```bash
+# Build and run with Wine
+./scripts/dev-mac.sh
+
+# Or just build (works on Mac/Linux/Windows)
+./scripts/build.sh         # Release build
+./scripts/build.sh Debug   # Debug build
+```
+
+### Limitations
+
+Wine won't perfectly emulate Windows layered windows:
+
+- Transparency may render incorrectly (solid background)
+- Click-through mode won't work
+- System tray behavior may differ
+- Always-on-top might not work as expected
+
+**For final testing, use a real Windows machine or VM.**
 
 ## License
 
