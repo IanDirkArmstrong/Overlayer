@@ -18,11 +18,19 @@ public partial class OverlayWindow : Window
     private double _scaleAtResizeStart;
     private Point _anchorPoint;
 
+    // Margin adjustment fields
+    private bool _isAdjustingMargin;
+    private MarginType _marginBeingAdjusted;
+    private Point _marginAdjustStart;
+    private int _marginStartValue;
+
     private enum ResizeEdge
     {
         None, Left, Right, Top, Bottom,
         TopLeft, TopRight, BottomLeft, BottomRight
     }
+
+    private enum MarginType { None, Padding, SnapMargin }
 
     public OverlayWindow()
     {
@@ -73,6 +81,23 @@ public partial class OverlayWindow : Window
         if (ViewModel.IsLocked) return;
 
         var point = e.GetPosition(this);
+
+        // Check for Alt+drag margin adjustment
+        if (Keyboard.IsKeyDown(Key.LeftAlt) || Keyboard.IsKeyDown(Key.RightAlt))
+        {
+            _marginBeingAdjusted = GetMarginTypeAtPoint(point);
+            if (_marginBeingAdjusted != MarginType.None)
+            {
+                _isAdjustingMargin = true;
+                _marginAdjustStart = PointToScreen(point);
+                _marginStartValue = _marginBeingAdjusted == MarginType.Padding
+                    ? ViewModel.Padding
+                    : ViewModel.SnapMargin;
+                CaptureMouse();
+                return;
+            }
+        }
+
         _activeEdge = GetEdgeAtPoint(point);
 
         if (_activeEdge != ResizeEdge.None)
@@ -95,7 +120,13 @@ public partial class OverlayWindow : Window
 
     private void OnMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
-        if (_activeEdge != ResizeEdge.None)
+        if (_isAdjustingMargin)
+        {
+            _isAdjustingMargin = false;
+            _marginBeingAdjusted = MarginType.None;
+            ReleaseMouseCapture();
+        }
+        else if (_activeEdge != ResizeEdge.None)
         {
             _activeEdge = ResizeEdge.None;
             ReleaseMouseCapture();
@@ -123,7 +154,20 @@ public partial class OverlayWindow : Window
 
         var point = e.GetPosition(this);
 
-        if (_activeEdge != ResizeEdge.None && e.LeftButton == MouseButtonState.Pressed)
+        if (_isAdjustingMargin && e.LeftButton == MouseButtonState.Pressed)
+        {
+            // Handle margin adjustment
+            var currentPoint = PointToScreen(point);
+            var delta = currentPoint - _marginAdjustStart;
+            var change = (int)((delta.X + delta.Y) / 2);
+            var newValue = Math.Max(0, _marginStartValue + change);
+
+            if (_marginBeingAdjusted == MarginType.Padding)
+                ViewModel.Padding = newValue;
+            else
+                ViewModel.SnapMargin = newValue;
+        }
+        else if (_activeEdge != ResizeEdge.None && e.LeftButton == MouseButtonState.Pressed)
         {
             // Handle resize
             var currentPoint = PointToScreen(point);
@@ -210,6 +254,31 @@ public partial class OverlayWindow : Window
         if (nearBottom) return ResizeEdge.Bottom;
 
         return ResizeEdge.None;
+    }
+
+    private MarginType GetMarginTypeAtPoint(Point point)
+    {
+        var width = ActualWidth;
+        var height = ActualHeight;
+        var padding = ViewModel.Padding * ViewModel.Scale;
+        var snapMargin = ViewModel.SnapMargin * ViewModel.Scale;
+
+        // Check if in snap margin zone (outside the window bounds, extended by snap margin)
+        // Since snap margin visualization extends outward, check if near edges but within snap zone
+        var inSnapZone = point.X < snapMargin || point.X > width - snapMargin ||
+                         point.Y < snapMargin || point.Y > height - snapMargin;
+
+        // Check if in padding zone (inside the window, within padding distance from edges)
+        var inPaddingZone = point.X < padding || point.X > width - padding ||
+                            point.Y < padding || point.Y > height - padding;
+
+        // Prefer padding if in that zone, otherwise snap margin
+        if (inPaddingZone)
+            return MarginType.Padding;
+        if (inSnapZone)
+            return MarginType.SnapMargin;
+
+        return MarginType.None;
     }
 
     private Cursor GetCursorForEdge(ResizeEdge edge) => edge switch

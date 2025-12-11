@@ -6,5 +6,6 @@
     <Application.Resources>
         <BooleanToVisibilityConverter x:Key="BoolToVis"/>
         <converters:InverseBooleanToVisibilityConverter x:Key="InverseBoolToVis"/>
+        <converters:NegativeMarginConverter x:Key="NegativeMarginConverter"/>
     </Application.Resources>
 </Application>
