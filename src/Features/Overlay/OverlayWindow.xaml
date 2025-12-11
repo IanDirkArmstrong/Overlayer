@@ -1,0 +1,60 @@
+<Window x:Class="Overlayer.Features.Overlay.OverlayWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        Topmost="True"
+        ShowInTaskbar="False"
+        ResizeMode="NoResize"
+        SizeToContent="WidthAndHeight">
+
+    <Window.Resources>
+        <Style x:Key="MenuItemStyle" TargetType="MenuItem">
+            <Setter Property="Padding" Value="8,4"/>
+        </Style>
+    </Window.Resources>
+
+    <Window.ContextMenu>
+        <ContextMenu>
+            <MenuItem Header="Lock (L)" Command="{Binding LockCommand}"
+                      Visibility="{Binding IsLocked, Converter={StaticResource InverseBoolToVis}}"/>
+            <MenuItem Header="Unlock (U)" Command="{Binding UnlockCommand}"
+                      Visibility="{Binding IsLocked, Converter={StaticResource BoolToVis}}"/>
+            <Separator/>
+            <MenuItem Header="Scale">
+                <MenuItem Header="25%" Command="{Binding SetScaleCommand}" CommandParameter="0.25"/>
+                <MenuItem Header="50%" Command="{Binding SetScaleCommand}" CommandParameter="0.5"/>
+                <MenuItem Header="75%" Command="{Binding SetScaleCommand}" CommandParameter="0.75"/>
+                <MenuItem Header="100% (0)" Command="{Binding SetScaleCommand}" CommandParameter="1.0"/>
+                <MenuItem Header="150%" Command="{Binding SetScaleCommand}" CommandParameter="1.5"/>
+                <MenuItem Header="200%" Command="{Binding SetScaleCommand}" CommandParameter="2.0"/>
+                <MenuItem Header="300%" Command="{Binding SetScaleCommand}" CommandParameter="3.0"/>
+                <Separator/>
+                <MenuItem Header="Increase (+)" Command="{Binding ScaleUpCommand}"/>
+                <MenuItem Header="Decrease (-)" Command="{Binding ScaleDownCommand}"/>
+            </MenuItem>
+            <Separator/>
+            <MenuItem Header="Close (Esc)" Command="{Binding CloseCommand}"/>
+        </ContextMenu>
+    </Window.ContextMenu>
+
+    <Grid x:Name="RootGrid">
+        <!-- Selection border (visible when unlocked) -->
+        <Border x:Name="SelectionBorder"
+                BorderBrush="#4000B4EF"
+                BorderThickness="1"
+                Visibility="{Binding IsLocked, Converter={StaticResource InverseBoolToVis}}"
+                IsHitTestVisible="False"/>
+
+        <!-- The overlay image -->
+        <Image x:Name="OverlayImage"
+               Source="{Binding CurrentImage}"
+               Stretch="None"
+               RenderOptions.BitmapScalingMode="HighQuality">
+            <Image.LayoutTransform>
+                <ScaleTransform ScaleX="{Binding Scale}" ScaleY="{Binding Scale}"/>
+            </Image.LayoutTransform>
+        </Image>
+    </Grid>
+</Window>
