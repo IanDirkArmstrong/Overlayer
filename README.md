@@ -1,6 +1,6 @@
 # Overlayer - Multi-Image Overlay Tool
 
-A portable Windows WinForms application that displays multiple PNG images as transparent, always-on-top overlay windows.
+A portable Windows WPF application that displays multiple PNG images as transparent, always-on-top overlay windows.
 
 ## Features
 
@@ -8,11 +8,12 @@ A portable Windows WinForms application that displays multiple PNG images as tra
 - **Transparent Windows**: Full alpha transparency support for PNG images
 - **Always on Top**: Overlays stay visible over all windows, including fullscreen games
 - **Drag to Move**: Click and drag any overlay to reposition it
-- **Resize Handle**: Drag the corner handle to scale images (aspect ratio preserved)
+- **Edge & Corner Resize**: Drag any edge or corner to scale images (aspect ratio preserved)
 - **Scroll to Scale**: Use mouse wheel to resize overlays (10% - 1000%)
 - **Click-through Mode**: Lock overlays so mouse clicks pass through to windows below
 - **Auto-Crop Transparency**: Automatically removes transparent edges from images
 - **Padding**: Add configurable padding around images for positioning flexibility
+- **Alt+Drag Margin Adjustment**: Hold Alt and drag to adjust padding or snap margin
 - **Screen Edge Snapping**: Overlays snap to screen edges when dragged near them
 - **Quick Snap Positions**: Instantly snap to corners or center via right-click menu
 - **Persistent Configuration**: All settings saved automatically
@@ -23,8 +24,7 @@ A portable Windows WinForms application that displays multiple PNG images as tra
 ### Prerequisites
 
 - .NET 8 SDK (or newer)
-- Windows 10/11 (for full functionality)
-- **Mac development**: Wine + XQuartz (for quick iteration testing)
+- Windows 10/11 (WPF is Windows-only)
 
 ### Build Commands
 
@@ -42,9 +42,11 @@ dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=
 
 The output will be in `src/bin/Release/net8.0-windows/win-x64/publish/Overlayer.exe`
 
-### Alternative: Build with Compression
+The project has compression enabled by default, so a simple publish will produce a compressed single-file executable:
+
 ```bash
-dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:EnableCompressionInSingleFile=true
+cd src
+dotnet publish -c Release
 ```
 
 ## Usage
@@ -78,11 +80,12 @@ Overlayer.exe "C:\Path\To\Images"
 | Action | Effect |
 |--------|--------|
 | **Left-click + Drag** | Move the overlay (snaps to edges) |
-| **Drag resize handle** | Scale the overlay (bottom-right corner) |
+| **Drag edge/corner** | Scale the overlay (any edge or corner) |
 | **Scroll Wheel** | Scale the overlay up/down |
+| **Alt + Drag** | Adjust padding or snap margin |
 | **Right-click** | Show context menu |
 
-A small resize handle appears in the bottom-right corner of each unlocked overlay. Drag it to resize.
+Resize handles appear on all edges and corners of each unlocked overlay. Drag any edge or corner to resize.
 
 ### Right-Click Context Menu
 
@@ -112,13 +115,14 @@ A small resize handle appears in the bottom-right corner of each unlocked overla
 When an overlay is **locked** (press `L`):
 - Mouse clicks pass through to windows below
 - The overlay cannot be moved or resized
-- The resize handle is hidden
+- The resize handles are hidden
 - Use tray menu "Unlock All Overlays" or press `U` while hovering
 
 When an overlay is **unlocked** (press `U`):
 - You can drag to move
-- You can drag the resize handle to scale
+- You can drag any edge or corner to scale
 - You can scroll to resize
+- You can Alt+drag to adjust margins
 - Right-click for context menu
 
 ### Transparency Cropping & Padding
@@ -200,21 +204,49 @@ Configuration is automatically saved to `overlayer-config.json` next to the exec
 
 ## Technical Details
 
+### Architecture
+
+The application uses a modern WPF architecture with:
+- **MVVM Pattern**: ViewModels for overlay and tray functionality
+- **Dependency Injection**: Microsoft.Extensions.DependencyInjection for service management
+- **CommunityToolkit.Mvvm**: For observable properties and commands
+- **Hardcodet.NotifyIcon.Wpf**: For system tray integration
+
+### Project Structure
+
+```text
+src/
+├── App.xaml.cs                 # Application entry, DI setup
+├── Features/
+│   ├── Overlay/                # Overlay windows
+│   │   ├── OverlayWindow.xaml  # WPF window definition
+│   │   ├── OverlayWindow.xaml.cs
+│   │   ├── OverlayViewModel.cs
+│   │   └── OverlayService.cs
+│   └── Tray/                   # System tray
+│       ├── TrayIconService.cs
+│       └── TrayViewModel.cs
+└── Shared/
+    ├── Models/                 # Configuration models
+    ├── Services/               # Shared services
+    ├── Native/                 # Win32 interop
+    └── Converters/             # WPF value converters
+```
+
 ### Window Behavior
 
-- Uses `WS_EX_LAYERED` for per-pixel alpha transparency
-- Uses `WS_EX_TRANSPARENT` for click-through when locked
-- Uses `WS_EX_TOPMOST` for always-on-top behavior
-- Uses `WS_EX_TOOLWINDOW` to hide from taskbar/alt-tab
-- Uses `WS_EX_NOACTIVATE` to prevent stealing focus
+- Uses WPF `AllowsTransparency` and `WindowStyle.None` for transparent windows
+- Uses `WS_EX_TRANSPARENT` (via Win32 interop) for click-through when locked
+- Uses `Topmost=true` for always-on-top behavior
+- Uses `ShowInTaskbar=false` to hide from taskbar
 
 ### Image Processing
 
-1. Load original image
+1. Load original image as WPF `BitmapImage`
 2. If `cropTransparency` enabled: scan for non-transparent pixels and crop to bounding box
 3. If `padding` > 0: add transparent border around the image
-4. Scale result by `scale` factor
-5. Render with per-pixel alpha via `UpdateLayeredWindow`
+4. Scale via WPF render transforms
+5. Display with native WPF alpha transparency
 
 ### Supported Image Formats
 
@@ -247,47 +279,3 @@ Use the system tray menu → "Unlock All Overlays" to regain control.
 ### Image looks different than expected
 
 Check "Crop Transparency" setting - if your image has intentional transparent areas at the edges, disable this option.
-
-## Mac Development (Wine + XQuartz)
-
-For quick iteration and testing on Mac, you can use Wine with XQuartz. This won't give you perfect Windows fidelity - transparency and click-through won't work correctly - but it's good enough to verify features work, test scaling logic, check image loading, etc.
-
-### One-Time Setup
-
-```bash
-# Install XQuartz (X11 for Mac)
-brew install --cask xquartz
-
-# Install Wine
-brew install wine-stable
-
-# IMPORTANT: Log out and back in after installing XQuartz
-```
-
-### Development Workflow
-
-```bash
-# Build and run with Wine (pass images via command line - dialogs don't work)
-./scripts/dev-mac.sh /path/to/test-image.png
-./scripts/dev-mac.sh /path/to/images/        # Load all images from directory
-
-# Or just build (works on Mac/Linux/Windows)
-./scripts/build.sh         # Release build
-./scripts/build.sh Debug   # Debug build
-```
-
-### Limitations
-
-Wine won't perfectly emulate Windows layered windows:
-
-- **File dialogs don't work** - pass images via command line instead
-- Transparency may render incorrectly (solid background)
-- Click-through mode won't work
-- System tray behavior may differ
-- Always-on-top might not work as expected
-
-**For final testing, use a real Windows machine or VM.**
-
-## License
-
-MIT License - Feel free to use and modify as needed.
