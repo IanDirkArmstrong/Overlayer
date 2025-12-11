@@ -1,6 +1,6 @@
 using System.Runtime.InteropServices;
 
-namespace Overlayer;
+namespace Overlayer.Shared.Native;
 
 /// <summary>
 /// Win32 interop methods for window manipulation.
